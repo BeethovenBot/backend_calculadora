@@ -12,7 +12,7 @@ app.use(cors());
 app.use('/v1/calculadora', router);
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok-ok', service: 'calculadora-api', time: new Date().toISOString() });
+  res.status(200).json({ status: 'ok-ok-Funciona nando', service: 'calculadora-api', time: new Date().toISOString() });
 });
 
 app.listen(3500, ()=>{
