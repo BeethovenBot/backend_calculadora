@@ -1,0 +1,61 @@
+name: Deploy Backend to EC2
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # OPCIONAL: correr tests antes de deploy
+      - name: Install deps & test
+        run: |
+          npm ci
+          npm test --if-present
+
+      # Subir solo lo necesario (excluye .git y node_modules)
+      - name: Deploy via rsync
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avzr --delete --exclude=".git" --exclude="node_modules"
+          path: "./"
+          remote_path: "/home/ubuntu/backend"   # <- AJUSTA si usas otra ruta
+          remote_host: ${{ secrets.EC2_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.EC2_SSH_KEY }}
+
+      # Instalar en EC2, volcar .env, y (re)iniciar PM2
+      - name: Post-deploy on EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd /home/ubuntu/backend
+            # .env desde secret si lo usas (crea el secret BACKEND_ENV_FILE)
+            if [ -n "${{ secrets.BACKEND_ENV_FILE }}" ]; then
+              echo "${{ secrets.BACKEND_ENV_FILE }}" > .env
+            fi
+            npm ci
+            npm run build --if-present
+            # Asegura el puerto en env si aplica:
+            # echo "PORT=3500" >> .env
+
+            # Levanta/reload PM2 (Ajusta el entry file real: index.js o server.js)
+            pm2 describe calculadora >/dev/null 2>&1 && pm2 reload calculadora || pm2 start index.js --name calculadora
+            pm2 save
+
+            # Smoke test local (Node)
+            curl -sf http://127.0.0.1:3500/health >/dev/null
+
+      # Smoke test público vía Nginx (IP o dominio)
+      - name: Public healthcheck
+        run: curl -sf "http://${{ secrets.EC2_HOST }}/health" >/dev/null
+
