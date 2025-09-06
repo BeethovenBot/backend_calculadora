@@ -12,24 +12,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # (Opcional) Ejecuta tests antes de desplegar
-      - name: Install deps & tests
+      - name: Install deps & tests (optional)
         run: |
           npm ci
           npm test --if-present
 
-      # Subir solo lo necesario al servidor (sin .git ni node_modules)
       - name: Deploy via rsync
         uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -avzr --delete --exclude=".git" --exclude="node_modules"
           path: "./"
-          remote_path: "/home/ubuntu/backend"     # AJUSTA si usas otra ruta
+          remote_path: "/home/ubuntu/backend"
           remote_host: ${{ secrets.EC2_HOST }}
           remote_user: ubuntu
           remote_key: ${{ secrets.EC2_SSH_KEY }}
 
-      # Instalar en EC2, preparar env, PM2 (1 solo proceso), y smoke tests
       - name: Post-deploy on EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -38,39 +35,49 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-
             cd /home/ubuntu/backend
 
-            # PM2 instalado (si no lo está)
+            # PM2 si no existe
             command -v pm2 >/dev/null 2>&1 || sudo npm i -g pm2
 
             # .env desde secret (opcional)
             if [ -n "${{ secrets.BACKEND_ENV_FILE }}" ]; then
               echo "${{ secrets.BACKEND_ENV_FILE }}" > .env
             fi
-            # Asegura el puerto por si tu .env no lo define
+            # Asegura puerto si no está en .env
             grep -q '^PORT=' .env 2>/dev/null || echo 'PORT=3500' >> .env
 
-            # Dependencias y build (si aplica)
+            # Dependencias/build
             npm ci
             npm run build --if-present
 
-            # Evita duplicados: elimina procesos con otros nombres
+            # Limpia duplicados
             pm2 delete calculadora >/dev/null 2>&1 || true
 
-            # Inicia o recarga SIEMPRE el mismo proceso y entry file
+            # Arranca o recarga SIEMPRE el mismo proceso (index.js)
             if pm2 describe backend-mozart >/dev/null 2>&1; then
-              pm2 reload backend-mozart
+              pm2 restart backend-mozart --update-env
             else
-              pm2 start index.js --name backend-mozart --cwd /home/ubuntu/backend
+              PORT=3500 NODE_ENV=production pm2 start index.js --name backend-mozart --cwd /home/ubuntu/backend
             fi
 
-            # Guarda la lista para que resucite tras reboot
             pm2 save
 
-            # Smoke test local (directo al Node en 127.0.0.1:3500)
-            curl -sf http://127.0.0.1:3500/health >/dev/null
+            # ---- Espera y reintenta healthcheck local (hasta 10 intentos) ----
+            ATTEMPTS=0
+            until curl -sf http://127.0.0.1:3500/health >/dev/null; do
+              ATTEMPTS=$((ATTEMPTS+1))
+              if [ $ATTEMPTS -ge 10 ]; then
+                echo "Healthcheck local FAILED. Estado PM2 y últimos logs:"
+                pm2 list || true
+                pm2 describe backend-mozart || true
+                pm2 logs backend-mozart --lines 80 || true
+                exit 1
+              fi
+              echo "Esperando a que la app suba... (intento $ATTEMPTS)"
+              sleep 2
+            done
+            echo "Healthcheck local OK."
 
-      # Smoke test público (vía Nginx en 80/443). Usa IP o dominio en EC2_HOST.
-      - name: Public healthcheck
+      - name: Public healthcheck (via Nginx)
         run: curl -sf "http://${{ secrets.EC2_HOST }}/health" >/dev/null
