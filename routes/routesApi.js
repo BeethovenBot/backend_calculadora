@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const calculadoraControllers = require('../controllers/ApiControllers.js');
+const ApiControllers = require('../controllers/ApiControllers.js');
 
 router
-    .get('/cron', ejecutarCron)
+    .get('/cron', ApiControllers.ejecutarCron)
 
 module.exports = router;

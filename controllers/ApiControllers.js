@@ -1,6 +1,6 @@
 
 
-function cron(req, res){
+function ejecutarCron(req, res){
     //voy y consulto a la base de datos
     //Envio los recordatorios que tenga que enviar
     res.json({
@@ -9,5 +9,5 @@ function cron(req, res){
 }
 
 module.exports = {
-    cron
+    ejecutarCron
 }
